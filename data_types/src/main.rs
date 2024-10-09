@@ -61,4 +61,52 @@ fn main() {
 
     let (q, w, e) = tup;
     println!("q: {}; w: {}; e: {}", q, w, e);
+
+
+    // Arrays have fixed length, each entry in an array must be of the same type
+    // Remember! Not explicitely mutable -> error if something new needs to be put into the array
+    let array = [1, 2, 3];
+
+    println!("{}", array[0]);
+
+    // specify type and length
+    let array2: [i32; 5];
+
+    // Vectors list of dynamic size
+    let mut nums = vec![1,2,3];
+
+    nums.push(4);
+
+    // ? puts nums into debug mode, : says take the next thing and push it into formatter
+    println!("{:?}", nums);
+    println!("{}", nums.capacity());
+
+    nums.push(4);
+    nums.push(4);
+    nums.push(4);
+
+    println!("{}", nums.capacity());
+
+    // remove last value
+    nums.pop();
+
+    println!("{:?}", nums);
+
+    //second way for vectors
+    let mut vec = Vec::new();
+
+    vec.push("Test");
+    vec.push("String");
+
+    println!("{:?}", vec);
+
+    vec.reverse();
+
+    println!("{:?}", vec);
+
+    // specify vector size
+
+    let mut vec2 = Vec::<i32>::with_capacity(2);
+
+    println!("{}", vec2.capacity())
 }
