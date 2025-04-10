@@ -1,45 +1,84 @@
-use std::time::{Duration};
 use notify_rust::Notification;
-use std::{thread, io};
-use std::io::prelude::*;
+use std::time::Duration;
+use std::thread;
+use std::sync::mpsc::{self, TryRecvError};
+use std::sync::{Arc, Mutex};
+use std::fs::File;
+use std::io::Read;
+use iced::window::Icon;
 
-use iced::widget::{container, slider, column, text};
-use iced::{Element, Center, Fill};
+use iced::widget::{
+    self, button, column, container, row, slider, text, Text
+};
+use iced::{Element, Center, Fill, Task, Bottom, window};
 
 fn main() -> iced::Result {
+    let icon = load_icon("assets/icon.png").expect("Failed to load icon");
+
     iced::application("Twenty", Twenty::update, Twenty::view)
-    .window_size(iced::Size::new(300.0, 300.0))
+    .window(window::Settings {
+        decorations: true,
+        resizable: false,
+        size: iced::Size::new(300.0, 300.0),
+        icon: Some(icon),
+        ..window::Settings::default()
+    })
     .run()
 }
 
-#[derive(Default)]
 struct Twenty {
     timeout: u8,
     timer: u8,
+    show_modal: bool,
+    state: State,
+    channel: Arc<Mutex<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     TimerSliderChanged(u8),
-    TimeoutSliderChanged(u8)
+    TimeoutSliderChanged(u8),
+    ShowModal,
+    HandleState
+}
+
+#[derive(PartialEq)]
+enum State {
+    Running,
+    Idle
 }
 
 impl Twenty {
 
-    fn new() -> Self {
-        Twenty {
-            timeout: 20,
-            timer: 20,
-        }
-    }
-
-    fn update(&mut self, message: Message) {
+    fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::TimerSliderChanged(value) => {
                 self.timer = value;
+                Task::none()
             }
             Message::TimeoutSliderChanged(value) => {
                 self.timeout = value;
+                Task::none()
+            }
+            Message::ShowModal => {
+                self.show_modal = true;
+                widget::focus_next()
+            }
+            Message::HandleState => {
+                match self.state {
+                    State::Running => {
+                        self.channel.lock().unwrap().0.send(()).unwrap();
+                        self.state = State::Idle;
+                        println!("Old State: Running, New State: Idle");
+                    }
+
+                    State::Idle => {
+                        spawn_timer_thread(self.timeout, self.timer, self.channel.clone());
+                        self.state = State::Running;
+                        println!("Old State: Idle, New State: Running");
+                    }
+                }
+                Task::none()
             }
         }
     }
@@ -47,46 +86,95 @@ impl Twenty {
     fn view(&self) -> Element<Message> {
         let timeout_slider = container(
             slider(5..= 60, self.timeout, Message::TimeoutSliderChanged)
-                .default(self.timeout)
+                .default(20)
                 .shift_step(1),
         )
         .width(200);
 
         let timer_slider = container(
             slider(1..= 60, self.timer, Message::TimerSliderChanged)
-                .default(self.timer)
+                .default(20)
                 .shift_step(1),
         )
         .width(200);
 
-        let timeout_text = text(format!("Timeout: {} seconds", self.timeout));
+        let timeout_text: Text = text(format!("Timeout: {} seconds", self.timeout));
         let timer_text = text(format!("Timer: {} minutes", self.timer));
+        
+        let button_text = match self.state {
+            State::Running => "Stop",
+            State::Idle => "Start"
+        };
 
-        column![timeout_text, timeout_slider, timer_text, timer_slider]
-            .spacing(20)
-            .padding(20)
+        let start_button = button(
+                container(
+                    text(button_text)
+                        .align_x(Center)
+                        .width(Fill)
+                )
+            )
+            .on_press(Message::HandleState)
             .width(Fill)
-            .align_x(Center)
-            .into()
+            .padding(10);
+
+        let content = container(
+    column![
+                row![
+                    column![timeout_text, timeout_slider, timer_text, timer_slider]
+                        .spacing(20)
+                        .padding(20)
+                        .width(Fill)
+                        .align_x(Center)
+                ],
+
+                row![
+                    column![start_button]
+                        .width(Fill)
+                        .align_x(Center)
+                ]
+                .height(Fill)
+                .width(Fill)
+                .align_y(Bottom)
+            ]
+            
+        );
+        
+        content.into()
     }
 }
 
-fn twenty() {
-    println!("Starting Twenty Eye Care Timer");
+impl Default for Twenty {
+    fn default() -> Self {
+        Twenty {
+            timeout: 20,
+            timer: 20,
+            show_modal: false,
+            state: State::Idle,
+            channel: Arc::new(Mutex::new(mpsc::channel())),
+        }
+    }
+}
 
-    let timeout_input = std::env::args().nth(1).expect("Missing timeout argument").parse::<u64>().expect("Invalid timeout value");
-    let timer_input = std::env::args().nth(2).expect("Missing timer argument").parse::<u64>().expect("Invalid timer value");
-    
-    let timeout = Duration::new(timeout_input, 0);
-    let timer = Duration::new(timer_input*60, 0);
+fn spawn_timer_thread(timeout_arg: u8, timer_arg: u8, channel: Arc<Mutex<(mpsc::Sender<()>, mpsc::Receiver<()>)>>) {
+    let timeout = Duration::new(timeout_arg as u64, 0);
+    let timer = Duration::new(timer_arg as u64 * 60, 0);
 
-    let msg = format!("Take a {} second break in {} minutes. Press Enter to stop the timer.", timeout.as_secs(), timer.as_secs()/60);
-    println!("{}", msg);
-
-    let handler = thread::spawn(move || {
+    let channel = Arc::clone(&channel);
+    thread::spawn(move || {
         loop {
             let notif_msg = format!("Take a break! Look away from the screen for {} seconds.", timeout.as_secs());
             thread::sleep(timer);
+            match channel.lock().unwrap().1.try_recv() {
+                Ok(a_) => {
+                    println!("Received stop message... {:?}", a_);
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    println!("Channel disconnected, stopping timer...");
+                    break;
+                }
+                Err(TryRecvError::Empty) => {}
+            }
             println!("Time to take a break! Look away from the screen.");
             Notification::new()
                 .summary("Take a Break!")
@@ -99,14 +187,15 @@ fn twenty() {
     });
 }
 
-fn pause() {
-    let mut stdin = io::stdin();
-    let mut stdout = io::stdout();
+fn load_icon(path: &str) -> Result<Icon, String> {
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
 
-    // We want the cursor to stay at the end of the line, so we print without a newline and flush manually.
-    write!(stdout, "Press any key to end... \n").unwrap();
-    stdout.flush().unwrap();
+    let decoder = png::Decoder::new(&buffer[..]);
+    let (info, mut reader) = decoder.read_info().map_err(|e| e.to_string())?;
+    let mut image_data = vec![0; info.buffer_size()];
+    reader.next_frame(&mut image_data).map_err(|e| e.to_string())?;
 
-    // Read a single byte and discard
-    let _ = stdin.read(&mut [0u8]).unwrap();
+    window::icon::from_rgba(image_data, info.width, info.height).map_err(|e| e.to_string())
 }
