@@ -3,9 +3,8 @@ use std::time::Duration;
 use std::thread;
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::{Arc, Mutex};
-use std::fs::File;
-use std::io::Read;
-use iced::window::Icon;
+use image::ImageReader;
+use iced::window::icon;
 
 use iced::widget::{
     self, button, column, container, row, slider, text, Text
@@ -13,7 +12,14 @@ use iced::widget::{
 use iced::{Element, Center, Fill, Task, Bottom, window};
 
 fn main() -> iced::Result {
-    let icon = load_icon("assets/icon.png").expect("Failed to load icon");
+    let img = ImageReader::open("assets/icon.png")
+        .unwrap()
+        .decode()
+        .unwrap()
+        .into_rgba8();
+    let width = img.width();
+    let height = img.height();
+    let icon = icon::from_rgba(img.into_raw(), width, height).unwrap();
 
     iced::application("Twenty", Twenty::update, Twenty::view)
     .window(window::Settings {
@@ -69,13 +75,11 @@ impl Twenty {
                     State::Running => {
                         self.channel.lock().unwrap().0.send(()).unwrap();
                         self.state = State::Idle;
-                        println!("Old State: Running, New State: Idle");
                     }
 
                     State::Idle => {
                         spawn_timer_thread(self.timeout, self.timer, self.channel.clone());
                         self.state = State::Running;
-                        println!("Old State: Idle, New State: Running");
                     }
                 }
                 Task::none()
@@ -187,15 +191,4 @@ fn spawn_timer_thread(timeout_arg: u8, timer_arg: u8, channel: Arc<Mutex<(mpsc::
     });
 }
 
-fn load_icon(path: &str) -> Result<Icon, String> {
-    let mut file = File::open(path).map_err(|e| e.to_string())?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
 
-    let decoder = png::Decoder::new(&buffer[..]);
-    let (info, mut reader) = decoder.read_info().map_err(|e| e.to_string())?;
-    let mut image_data = vec![0; info.buffer_size()];
-    reader.next_frame(&mut image_data).map_err(|e| e.to_string())?;
-
-    window::icon::from_rgba(image_data, info.width, info.height).map_err(|e| e.to_string())
-}
